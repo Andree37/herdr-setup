@@ -1,0 +1,373 @@
+#!/usr/bin/env python3
+"""herdr-agents — bring a herdr workspace back after a reboot.
+
+  herdr-agents save     snapshot the running herdr: layout + every agent's
+                        conversation id + what each plain pane was running
+                        (lazygit etc.). Run before restarting the laptop.
+  herdr-agents up       after the restart: restore the snapshot if herdr's own
+                        session file got lost, start herdr, then check every
+                        agent came back into its old conversation and resume
+                        any that didn't (claude --resume <id>), and re-run
+                        lazygit & co. in the panes that had them.
+  herdr-agents status   compare the snapshot with what's running now.
+  herdr-agents install  automate it: save every 5 min (launchd), and at login
+                        open a Ghostty window that runs `herdr-agents up`.
+  herdr-agents uninstall  remove those launchd jobs.
+
+Snapshots are kept as a history; `up` uses the newest one taken BEFORE the
+last boot, so an auto-save right after a bad restore can't clobber it.
+
+herdr already restores layout and resumes agents by itself on server start
+([session] resume_agents_on_restore, on by default). This wraps that with a
+backup and a check/repair pass, so a missed resume doesn't go unnoticed.
+"""
+import json
+import os
+import shutil
+import subprocess
+import sys
+import time
+
+HERDR = shutil.which("herdr") or os.path.expanduser("~/.local/bin/herdr")
+CONF = os.path.expanduser("~/.config/herdr")
+SESSION = os.path.join(CONF, "session.json")
+STATE_DIR = os.path.join(CONF, "herdr-agents")
+SNAPS = os.path.join(STATE_DIR, "snapshots")
+KEEP_SNAPS = 100            # ~8h of 5-minute saves
+LOG = os.path.join(STATE_DIR, "up.log")
+SELF = os.path.realpath(__file__)
+LAUNCH_AGENTS = os.path.expanduser("~/Library/LaunchAgents")
+JOB_SAVE = "com.andree37.herdr-agents.save"
+JOB_LOGIN = "com.andree37.herdr-agents.login"
+SAVE_EVERY_S = 300
+
+SHELLS = {"zsh", "-zsh", "bash", "-bash", "sh", "fish", "login"}
+# Plain-pane programs that are safe to start again unattended. Anything else
+# that was running (dev servers, builds, ...) is reported, not re-run.
+RERUN_OK = set(os.environ.get(
+    "HERDR_AGENTS_RERUN",
+    "lazygit lazydocker nvim vim htop btop yazi k9s").split())
+
+
+def herdr(*args, check=True):
+    r = subprocess.run([HERDR, *args], capture_output=True, text=True)
+    if check and r.returncode != 0:
+        raise RuntimeError(f"herdr {' '.join(args)}: {(r.stderr or r.stdout).strip()}")
+    return r
+
+
+def herdr_json(*args):
+    return json.loads(herdr(*args).stdout)["result"]
+
+
+def server_running():
+    r = herdr("status", "server", check=False)
+    return r.returncode == 0 and "status: running" in r.stdout
+
+
+def live_panes():
+    return {p["pane_id"]: p for p in herdr_json("pane", "list")["panes"]}
+
+
+def session_id(pane):
+    s = pane.get("agent_session") or {}
+    return s.get("value") if s.get("kind") == "id" else None
+
+
+def foreground_argv(pane_id):
+    try:
+        info = herdr_json("pane", "process-info", "--pane", pane_id)["process_info"]
+    except Exception:
+        return None
+    procs = [p for p in info.get("foreground_processes", [])
+             if p.get("name") not in SHELLS and p.get("argv0") not in SHELLS]
+    return procs[-1]["argv"] if procs else None
+
+
+def agent_refs(session_file):
+    """Conversation ids recorded in a herdr session.json."""
+    try:
+        with open(session_file) as f:
+            data = json.load(f)
+    except Exception:
+        return set()
+    ids = set()
+    for ws in data.get("workspaces", []):
+        for tab in ws.get("tabs", []):
+            for pane in tab.get("panes", {}).values():
+                ref = pane.get("agent_session") or {}
+                if ref.get("value"):
+                    ids.add(ref["value"])
+    return ids
+
+
+def boot_time():
+    out = subprocess.run(["sysctl", "-n", "kern.boottime"], capture_output=True, text=True).stdout
+    try:
+        return int(out.split("sec =")[1].split(",")[0])
+    except Exception:
+        return 0
+
+
+def snapshots():
+    """Snapshot dirs, newest first."""
+    try:
+        names = sorted(os.listdir(SNAPS), reverse=True)
+    except FileNotFoundError:
+        return []
+    return [os.path.join(SNAPS, n) for n in names
+            if os.path.exists(os.path.join(SNAPS, n, "state.json"))]
+
+
+def pick_snapshot(before_boot):
+    snaps = snapshots()
+    if not snaps:
+        sys.exit("No snapshot yet. Run `herdr-agents save` while herdr is running.")
+    if before_boot:
+        boot = boot_time()
+        for d in snaps:
+            if os.path.getmtime(os.path.join(d, "state.json")) < boot:
+                return d
+    return snaps[0]
+
+
+def load_state(snap):
+    with open(os.path.join(snap, "state.json")) as f:
+        return json.load(f)
+
+
+def log(msg):
+    line = f"{time.strftime('%H:%M:%S')} {msg}"
+    print(line, flush=True)
+
+
+# ---------------------------------------------------------------- save
+def cmd_save(quiet=False):
+    if not server_running():
+        if quiet:
+            return
+        sys.exit("herdr isn't running — nothing to save.")
+    panes = []
+    for pid, p in live_panes().items():
+        entry = {"pane_id": pid, "cwd": p.get("cwd"), "tab_id": p.get("tab_id")}
+        sid = session_id(p)
+        if p.get("agent") and sid:
+            entry["agent"] = {"kind": p["agent"], "session": sid,
+                              "title": p.get("terminal_title_stripped", "")}
+        elif not p.get("agent"):
+            argv = foreground_argv(pid)
+            if argv:
+                entry["command"] = argv
+        panes.append(entry)
+    if not panes:
+        return  # herdr up but empty (mid-startup): never record that as "the" state
+    state = {"saved_at": time.strftime("%Y-%m-%d %H:%M:%S"), "panes": panes}
+    snap = os.path.join(SNAPS, time.strftime("%Y%m%d-%H%M%S"))
+    tmp = snap + ".tmp"
+    os.makedirs(tmp, exist_ok=True)
+    with open(os.path.join(tmp, "state.json"), "w") as f:
+        json.dump(state, f, indent=2)
+    shutil.copy2(SESSION, os.path.join(tmp, "session.json"))
+    shutil.rmtree(snap, ignore_errors=True)
+    os.replace(tmp, snap)
+    for old in snapshots()[KEEP_SNAPS:]:
+        shutil.rmtree(old, ignore_errors=True)
+    if quiet:
+        return
+    agents = [p for p in panes if "agent" in p]
+    cmds = [p for p in panes if "command" in p]
+    print(f"Saved {len(panes)} panes: {len(agents)} agents, {len(cmds)} running commands.")
+    for p in agents:
+        print(f"  {p['pane_id']:7} {p['agent']['kind']} {p['agent']['session'][:8]}  {p['agent']['title'][:50]}")
+    for p in cmds:
+        mark = "" if p["command"][0] in RERUN_OK else "  (won't auto-restart)"
+        print(f"  {p['pane_id']:7} {' '.join(p['command'])[:60]}{mark}")
+    print(f"Snapshot: {snap}\nAfter the restart run: herdr-agents up")
+
+
+# ---------------------------------------------------------------- up
+def cmd_up():
+    if server_running():
+        print("herdr is already running — checking agents, then attaching.")
+        repair(load_state(pick_snapshot(before_boot=False)), wait=False)
+        os.execv(HERDR, [HERDR])
+    snap = pick_snapshot(before_boot=True)
+    saved_session = os.path.join(snap, "session.json")
+    print(f"Using snapshot {os.path.basename(snap)}")
+
+    # herdr restores from session.json. If it went missing or lost agents
+    # (crash mid-write, etc.), put the snapshot's copy back first.
+    saved = agent_refs(saved_session)
+    current = agent_refs(SESSION)
+    if saved and not saved <= current:
+        if os.path.exists(SESSION):
+            bak = f"{SESSION}.before-herdr-agents.{int(time.time())}"
+            shutil.copy2(SESSION, bak)
+            print(f"session.json is missing {len(saved - current)} saved agents; old copy kept at {bak}")
+        shutil.copy2(saved_session, SESSION)
+        print("Restored session.json from the herdr-agents snapshot.")
+
+    # Repair pass runs in the background (herdr takes over this terminal) and
+    # reports back through a herdr notification; full log in up.log.
+    os.makedirs(STATE_DIR, exist_ok=True)
+    with open(LOG, "w") as out:
+        subprocess.Popen([sys.executable, SELF, "_repair", snap],
+                         stdout=out, stderr=subprocess.STDOUT,
+                         stdin=subprocess.DEVNULL, start_new_session=True)
+    os.execv(HERDR, [HERDR])
+
+
+def repair(state, wait=True):
+    want_agents = {p["agent"]["session"]: p for p in state["panes"] if "agent" in p}
+    want_cmds = [p for p in state["panes"] if "command" in p]
+
+    if wait:
+        deadline = time.time() + 120
+        while not server_running():
+            if time.time() > deadline:
+                log("herdr server never came up — giving up.")
+                return
+            time.sleep(1)
+        log("server up, waiting for herdr's own agent resume...")
+        # herdr resumes agents one after another; give it time to finish.
+        deadline = time.time() + 90
+        while time.time() < deadline:
+            live = {session_id(p) for p in live_panes().values() if p.get("agent")}
+            if set(want_agents) <= live:
+                break
+            time.sleep(3)
+
+    panes = live_panes()
+    live_ids = {session_id(p): pid for pid, p in panes.items() if p.get("agent")}
+    resumed, started, failed, reran, skipped = [], [], [], [], []
+
+    for sid, saved in want_agents.items():
+        if sid in live_ids:
+            resumed.append(saved["pane_id"])
+            continue
+        pid = saved["pane_id"]
+        pane = panes.get(pid)
+        if not pane or pane.get("cwd") != saved["cwd"] or pane.get("agent"):
+            failed.append(f"{pid} (pane gone/changed; resume by hand: cd {saved['cwd']} && claude --resume {sid})")
+            continue
+        name = f"{os.path.basename(saved['cwd'])}-{pid.replace(':', '-')}"
+        r = herdr("agent", "start", name, "--kind", saved["agent"]["kind"], "--pane", pid,
+                  "--timeout", "60000", "--", "--resume", sid, check=False)
+        (started if r.returncode == 0 else failed).append(
+            pid if r.returncode == 0 else f"{pid} ({(r.stderr or r.stdout).strip()[:120]})")
+
+    panes = live_panes()
+    for saved in want_cmds:
+        pid, argv = saved["pane_id"], saved["command"]
+        if argv[0] not in RERUN_OK:
+            skipped.append(f"{pid}: {' '.join(argv)[:60]}")
+            continue
+        pane = panes.get(pid)
+        if not pane or pane.get("cwd") != saved["cwd"] or pane.get("agent"):
+            skipped.append(f"{pid}: {argv[0]} (pane gone/changed)")
+            continue
+        if foreground_argv(pid):
+            continue  # something's already running there
+        herdr("pane", "run", pid, " ".join(argv), check=False)
+        reran.append(f"{pid}: {argv[0]}")
+
+    log(f"agents: {len(resumed)} resumed by herdr, {len(started)} resumed by herdr-agents, {len(failed)} failed")
+    for x in started: log(f"  resumed {x}")
+    for x in failed: log(f"  FAILED {x}")
+    for x in reran: log(f"  re-ran {x}")
+    for x in skipped: log(f"  not restarted {x}")
+
+    title = "herdr-agents: all agents back" if not failed else f"herdr-agents: {len(failed)} agent(s) NOT resumed"
+    body = f"{len(resumed) + len(started)}/{len(want_agents)} agents resumed, {len(reran)} commands re-run."
+    if failed:
+        body += f" See {LOG}"
+    herdr("notification", "show", title, "--body", body, check=False)
+
+
+# ---------------------------------------------------------------- status
+def cmd_status():
+    snap = pick_snapshot(before_boot=False)
+    state = load_state(snap)
+    print(f"Latest snapshot {state['saved_at']} ({len(snapshots())} kept in {SNAPS})")
+    for job in (JOB_SAVE, JOB_LOGIN):
+        loaded = subprocess.run(["launchctl", "list", job], capture_output=True).returncode == 0
+        print(f"  launchd {job}: {'loaded' if loaded else 'not installed'}")
+    if not server_running():
+        print("herdr is not running. Run: herdr-agents up")
+        return
+    live = {session_id(p) for p in live_panes().values() if p.get("agent")}
+    for p in state["panes"]:
+        if "agent" in p:
+            ok = "ok     " if p["agent"]["session"] in live else "MISSING"
+            print(f"  {ok} {p['pane_id']:7} {p['agent']['session'][:8]}  {p['agent']['title'][:50]}")
+
+
+def plist(label, args, extra):
+    import plistlib
+    os.makedirs(LAUNCH_AGENTS, exist_ok=True)
+    path = os.path.join(LAUNCH_AGENTS, label + ".plist")
+    data = {"Label": label, "ProgramArguments": args,
+            "StandardOutPath": os.path.join(STATE_DIR, label + ".log"),
+            "StandardErrorPath": os.path.join(STATE_DIR, label + ".log"),
+            "EnvironmentVariables": {"PATH": os.path.dirname(HERDR) + ":/usr/bin:/bin:/usr/sbin:/sbin"},
+            **extra}
+    subprocess.run(["launchctl", "bootout", f"gui/{os.getuid()}", path], capture_output=True)
+    with open(path, "wb") as f:
+        plistlib.dump(data, f)
+    subprocess.run(["launchctl", "bootstrap", f"gui/{os.getuid()}", path], check=True)
+    return path
+
+
+def cmd_install():
+    os.makedirs(STATE_DIR, exist_ok=True)
+    py = "/usr/bin/python3"
+    p1 = plist(JOB_SAVE, [py, SELF, "save", "--quiet"],
+               {"StartInterval": SAVE_EVERY_S, "RunAtLoad": False})
+    p2 = plist(JOB_LOGIN, [py, SELF, "_login"], {"RunAtLoad": True})
+    print(f"Installed:\n  {p1}  (save every {SAVE_EVERY_S // 60} min)\n  {p2}  (at login: Ghostty window running herdr-agents up)")
+
+
+def cmd_uninstall():
+    for job in (JOB_SAVE, JOB_LOGIN):
+        path = os.path.join(LAUNCH_AGENTS, job + ".plist")
+        subprocess.run(["launchctl", "bootout", f"gui/{os.getuid()}", path], capture_output=True)
+        if os.path.exists(path):
+            os.remove(path)
+            print(f"Removed {path}")
+
+
+def cmd_login():
+    """launchd RunAtLoad: open Ghostty with `herdr-agents up` unless herdr is already up.
+    Also fires on `install` itself, where herdr is running, so it no-ops."""
+    if server_running():
+        log("login: herdr already running, nothing to do")
+        return
+    log("login: opening Ghostty with herdr-agents up")
+    # Login zsh so the window gets the normal PATH/env the panes and agents expect.
+    subprocess.run(["open", "-na", "Ghostty.app", "--args", "-e",
+                    "/bin/zsh", "-lc", f"'{SELF}' up"], check=False)
+
+
+def main():
+    cmd = sys.argv[1] if len(sys.argv) > 1 else "help"
+    if cmd == "save":
+        cmd_save(quiet="--quiet" in sys.argv)
+    elif cmd == "install":
+        cmd_install()
+    elif cmd == "uninstall":
+        cmd_uninstall()
+    elif cmd == "_login":
+        cmd_login()
+    elif cmd == "up":
+        cmd_up()
+    elif cmd == "status":
+        cmd_status()
+    elif cmd == "_repair":
+        repair(load_state(sys.argv[2] if len(sys.argv) > 2 else pick_snapshot(before_boot=False)))
+    else:
+        print(__doc__.strip())
+        sys.exit(0 if cmd in ("help", "-h", "--help") else 1)
+
+
+if __name__ == "__main__":
+    main()

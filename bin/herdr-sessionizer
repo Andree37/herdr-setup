@@ -1,0 +1,68 @@
+#!/usr/bin/env bash
+# herdr-sessionizer: tmux-sessionizer for herdr.
+#
+# Lists every open tab with its agent's state (a space with several tabs shows
+# each as "space / tab"), blocked and done first since those wait on you, then
+# every project under $PROJECT_ROOTS.
+#   enter   on an open tab:   go to it.
+#   enter   on a project:     open a new space there with claude (herdr-new).
+#   ctrl-n  on either:        another claude in its directory, as a new tab in
+#                             the space already open there (herdr-new).
+#
+# Bound in herdr's config.toml as a popup (prefix+f).
+
+set -euo pipefail
+export PATH="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"
+
+# Each root's children are projects (depth 2 for ~/github: org/repo).
+PROJECT_ROOTS=${PROJECT_ROOTS:-"$HOME/github:2"}
+
+projects() {
+    local entry root depth
+    for entry in $PROJECT_ROOTS; do
+        root=${entry%:*}
+        depth=${entry##*:}
+        find "$root" -mindepth "$depth" -maxdepth "$depth" -type d -not -name '.*' 2>/dev/null
+    done | sort
+}
+
+# Rows are "kind<TAB>workspace_id<TAB>tab_id<TAB>dir<TAB>shown"; fzf shows
+# only the last; a project has "-" for ids. An open space's directory is its
+# first pane's.
+rows() {
+    jq -nr --argjson ws "$(herdr workspace list)" --argjson ts "$(herdr tab list)" \
+           --argjson ps "$(herdr pane list)" '
+        ($ps.result.panes | group_by(.workspace_id)
+            | map({key: .[0].workspace_id, value: .[0].cwd}) | from_entries) as $dirs
+        | ($ts.result.tabs | group_by(.workspace_id)
+            | map({key: .[0].workspace_id, value: .}) | from_entries) as $tabs
+        | {blocked: "\u001b[31m", done: "\u001b[32m", working: "\u001b[33m"} as $colour
+        | [ $ws.result.workspaces[] as $w
+            | $tabs[$w.workspace_id][]
+            | {w: $w, t: .} ]
+        | sort_by(.t.agent_status | if . == "blocked" then 0 elif . == "done" then 1 else 2 end)[]
+        | .w as $w | .t as $t
+        | "open\t\($w.workspace_id)\t\($t.tab_id)\t\($dirs[$w.workspace_id] // "")\t"
+          + "\($colour[$t.agent_status] // "\u001b[2m")● \($t.agent_status)\u001b[0m  \($w.label)"
+          + (if $w.tab_count > 1 then " / \($t.label)" else "" end)'
+    projects | while read -r dir; do
+        printf 'new\t-\t-\t%s\t  + %s\n' "$dir" "${dir#"$HOME"/}"
+    done
+}
+
+{ rows | fzf --delimiter=$'\t' --with-nth=5 --ansi --expect=ctrl-n \
+        --prompt='space> ' \
+        --header='enter: go / open project   ctrl-n: another claude in that dir' \
+        --layout=reverse --height=100% --border=none \
+  || true; } | {  # esc exits non-zero
+    read -r key || true
+    read -r pick || true
+    [[ -n ${pick:-} ]] || exit 0
+    IFS=$'\t' read -r kind ws tab dir _ <<<"$pick"
+    if [[ $kind == open && $key != ctrl-n ]]; then
+        herdr workspace focus "$ws" >/dev/null
+        herdr tab focus "$tab" >/dev/null
+    else
+        herdr-new "$dir"
+    fi
+}

@@ -1,0 +1,38 @@
+#!/usr/bin/env bash
+# herdr-new [DIR]: start another claude session in DIR (default: current dir).
+#
+# One space per directory: if a space already works in DIR (its first pane's
+# directory), the session becomes a new tab there, so it shows under that
+# space in the sidebar. Otherwise a space named after DIR is opened for it.
+# Asks for the session's name first (the tab name the sidebar shows); empty
+# keeps herdr's generated one.
+
+set -euo pipefail
+export PATH="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"
+
+dir=$(cd "${1:-$PWD}" && pwd -P)
+
+# From the terminal, not stdin: the picker runs this with fzf's output on stdin.
+name=
+read -r -p "session name in $(basename "$dir") (empty: automatic): " name </dev/tty || true
+label=()
+[[ -n $name ]] && label=(--label "$name")
+
+space=$(herdr pane list | jq -r --arg d "$dir" '
+    .result.panes | group_by(.workspace_id) | map(.[0])
+    | map(select(.cwd == $d)) | first | .workspace_id // empty')
+
+if [[ -n $space ]]; then
+    # ${label[@]+...}: an empty array under set -u breaks bash 3.2, macOS's /bin/bash.
+    pane=$(herdr tab create --workspace "$space" --cwd "$dir" ${label[@]+"${label[@]}"} --focus \
+        | jq -r '.result.root_pane.pane_id')
+    herdr workspace focus "$space" >/dev/null
+else
+    pane=$(herdr workspace create --cwd "$dir" --label "$(basename "$dir")" --focus \
+        | jq -r '.result.root_pane.pane_id')
+    [[ -n $name ]] && herdr tab rename "$(herdr pane get "$pane" | jq -r '.result.pane.tab_id')" "$name" >/dev/null
+fi
+
+# Typed into the new shell rather than `herdr agent start`, which waits until
+# claude is ready for input and so held the picker's popup open until then.
+herdr pane run "$pane" claude >/dev/null

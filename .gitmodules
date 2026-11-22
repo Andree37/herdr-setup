@@ -1,0 +1,15 @@
+[submodule "tools/code-tree"]
+	path = tools/code-tree
+	url = https://github.com/Andree37/code-tree.git
+[submodule "tools/intercom"]
+	path = tools/intercom
+	url = https://github.com/Andree37/intercom.git
+[submodule "plugins/herdr-ct"]
+	path = plugins/herdr-ct
+	url = https://github.com/Andree37/herdr-ct.git
+[submodule "plugins/herdr-intercom"]
+	path = plugins/herdr-intercom
+	url = https://github.com/Andree37/herdr-intercom.git
+[submodule "plugins/herdr-views"]
+	path = plugins/herdr-views
+	url = https://github.com/Andree37/herdr-views.git
