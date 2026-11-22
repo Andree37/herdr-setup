@@ -134,8 +134,11 @@ done
 # starts it with the server; start it now too, so nothing waits for a restart.
 # One left running from another checkout is stopped first.
 pidfile="${XDG_CACHE_HOME:-$HOME/.cache}/herdr-views/annotate.pid"
-if [ -f "$pidfile" ] && pid="$(cat "$pidfile")" && kill -0 "$pid" 2>/dev/null &&
-  ! ps -o command= -p "$pid" | grep -qF "$src/herdr-views/"; then
+# Only kill what is really a herdr-views loop: a stale pidfile's pid may now
+# belong to any other process.
+if [ -f "$pidfile" ] && pid="$(cat "$pidfile")" &&
+  cmd="$(ps -o command= -p "$pid" 2>/dev/null)" && printf '%s' "$cmd" | grep -q "hv _annotate_loop" &&
+  ! printf '%s' "$cmd" | grep -qF "$src/herdr-views/"; then
   run kill "$pid"
   sleep 0.5
 fi

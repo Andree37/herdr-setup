@@ -23,6 +23,7 @@ backup and a check/repair pass, so a missed resume doesn't go unnoticed.
 """
 import json
 import os
+import shlex
 import shutil
 import subprocess
 import sys
@@ -268,7 +269,7 @@ def repair(state, wait=True):
             continue
         if foreground_argv(pid):
             continue  # something's already running there
-        herdr("pane", "run", pid, " ".join(argv), check=False)
+        herdr("pane", "run", pid, shlex.join(argv), check=False)  # quoted, so "my notes.md" stays one file
         reran.append(f"{pid}: {argv[0]}")
 
     log(f"agents: {len(resumed)} resumed by herdr, {len(started)} resumed by herdr-agents, {len(failed)} failed")
