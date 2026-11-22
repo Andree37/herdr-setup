@@ -2,11 +2,17 @@
 # Set up the whole herdr workspace on this machine: tools, plugins, config, scripts.
 # Safe to run again at any time; it only changes what is out of date.
 #
+# Each tool and plugin is its own repo. They are cloned next to this one
+# (override with HERDR_SRC) and pulled to their latest on every run.
+#
 #   ./install.sh            everything
 #   ./install.sh --dry-run  print what it would do, change nothing
 set -euo pipefail
 
 repo="$(cd "$(dirname "$0")" && pwd)"
+src="${HERDR_SRC:-$(dirname "$repo")}"
+tools=(code-tree intercom)
+plugins=(herdr-ct herdr-intercom herdr-views)
 stamp="$(date +%Y%m%d%H%M%S)"
 dry=0
 [ "${1:-}" = "--dry-run" ] && dry=1
@@ -46,16 +52,30 @@ gh auth status >/dev/null 2>&1 || echo "note: run \`gh auth login\` so herdr-vie
 
 # ---------------------------------------------------------------- sources
 
-say "submodules"
-run git -C "$repo" submodule update --init --recursive
+say "repos in $src"
+for name in "${tools[@]}" "${plugins[@]}"; do
+  dir="$src/$name"
+  if [ ! -d "$dir/.git" ]; then
+    run git clone -q "https://github.com/Andree37/$name.git" "$dir"
+    [ "$dry" = 1 ] || echo "  cloned $name"
+  elif [ -n "$(git -C "$dir" status --porcelain)" ]; then
+    echo "  $name has uncommitted changes: left as it is"
+  elif [ "$dry" = 1 ]; then
+    echo "  would pull $name"
+  elif git -C "$dir" pull -q --ff-only 2>/dev/null; then
+    echo "  $name at $(git -C "$dir" log -1 --format='%h %s' | cut -c1-70)"
+  else
+    echo "  $name could not fast-forward (local commits or no upstream): left as it is"
+  fi
+done
 
 # ---------------------------------------------------------------- tools
 
 say "tools: ct (code-tree) and ic (intercom)"
 for tool in code-tree:ct intercom:ic; do
   dir="${tool%%:*}" bin="${tool##*:}"
-  if [ "$dry" = 1 ]; then echo "  would run: go install ./cmd/$bin   (in tools/$dir)"
-  else (cd "$repo/tools/$dir" && go install "./cmd/$bin") && echo "  installed $bin"; fi
+  if [ "$dry" = 1 ]; then echo "  would run: go install ./cmd/$bin   (in $src/$dir)"
+  else (cd "$src/$dir" && go install "./cmd/$bin") && echo "  installed $bin"; fi
 done
 settings="$HOME/.claude/settings.json"
 for bin in ct ic; do   # Claude Code hooks, skipped when already there
@@ -96,8 +116,8 @@ if ! herdr plugin list >/dev/null 2>&1; then
   exit 0
 fi
 listed="$(herdr plugin list 2>/dev/null)"
-for dir in "$repo"/plugins/*/; do
-  dir="${dir%/}"
+for name in "${plugins[@]}"; do
+  dir="$src/$name"
   id="$(sed -n 's/^id = "\(.*\)"/\1/p' "$dir/herdr-plugin.toml" | head -1)"
   line="$(printf '%s\n' "$listed" | grep -F -- "- $id " || true)"
   case "$line" in
@@ -115,10 +135,10 @@ done
 # One left running from another checkout is stopped first.
 pidfile="${XDG_CACHE_HOME:-$HOME/.cache}/herdr-views/annotate.pid"
 if [ -f "$pidfile" ] && pid="$(cat "$pidfile")" && kill -0 "$pid" 2>/dev/null &&
-  ! ps -o command= -p "$pid" | grep -qF "$repo/plugins/herdr-views/"; then
+  ! ps -o command= -p "$pid" | grep -qF "$src/herdr-views/"; then
   run kill "$pid"
   sleep 0.5
 fi
-run env HERDR_PLUGIN_ID=local.herdr-views sh "$repo/plugins/herdr-views/annotate-startup.sh"
+run env HERDR_PLUGIN_ID=local.herdr-views sh "$src/herdr-views/annotate-startup.sh"
 run herdr server reload-config >/dev/null
 say "done"
