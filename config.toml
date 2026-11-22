@@ -84,6 +84,20 @@ type = "plugin_action"
 command = "andree37.ct.open-below"
 description = "code-tree below this agent"
 
+# lazygit (herdr-lazygit plugin): beside the agent, in its repo. Same key jumps
+# to it, or closes it when you are on it.
+[[keys.command]]
+key = "prefix+g"
+type = "plugin_action"
+command = "andree37.lazygit.toggle"
+description = "lazygit beside this agent"
+
+[[keys.command]]
+key = "prefix+shift+g"
+type = "plugin_action"
+command = "andree37.lazygit.toggle-below"
+description = "lazygit below this agent"
+
 [ui]
 sidebar_start_collapsed = false
 sidebar_collapsed_mode = "compact"

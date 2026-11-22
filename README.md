@@ -17,12 +17,12 @@ safe.
 
 It does:
 
-- missing dependencies through Homebrew: `go`, `python3`, `jq`, `fzf`, `gh`, and herdr itself
+- missing dependencies through Homebrew: `go`, `python3`, `jq`, `fzf`, `gh`, `lazygit`, and herdr itself
 - clones each component repo next to this one (`~/github/Andree37/<repo>`, or `$HERDR_SRC`), or pulls
   the latest if it is already there; a repo with uncommitted or unpushed work is left alone
 - `ct` and `ic` (`go install`) and both tools' Claude Code hooks
 - links: `config.toml` to `~/.config/herdr/config.toml`, `bin/*` to `~/.local/bin/`
-- the three plugins, linked from their clones so herdr runs exactly what is on disk
+- the four plugins, linked from their clones so herdr runs exactly what is on disk
 
 ## Components
 
@@ -32,6 +32,7 @@ It does:
 | [intercom](https://github.com/Andree37/intercom) | `ic`: agent sessions (and you) message each other |
 | [herdr-ct](https://github.com/Andree37/herdr-ct) | `prefix+t`: code-tree pane beside the agent |
 | [herdr-intercom](https://github.com/Andree37/herdr-intercom) | `prefix+i`: intercom pane |
+| [herdr-lazygit](https://github.com/Andree37/herdr-lazygit) | `prefix+g`: lazygit beside the agent, in its repo (same key jumps to it or closes it); `prefix+shift+g` below |
 | [herdr-views](https://github.com/Andree37/herdr-views) | `prefix+a` agents, `prefix+p` PRs, `prefix+shift+l` links, `prefix+o` / `prefix+shift+o` back and forward, `prefix+n` the agent that needs you |
 
 And in this repo:

@@ -12,7 +12,7 @@ set -euo pipefail
 repo="$(cd "$(dirname "$0")" && pwd)"
 src="${HERDR_SRC:-$(dirname "$repo")}"
 tools=(code-tree intercom)
-plugins=(herdr-ct herdr-intercom herdr-views)
+plugins=(herdr-ct herdr-intercom herdr-lazygit herdr-views)
 stamp="$(date +%Y%m%d%H%M%S)"
 dry=0
 [ "${1:-}" = "--dry-run" ] && dry=1
@@ -28,7 +28,7 @@ export PATH="$HOME/.local/bin:$HOME/go/bin:/opt/homebrew/bin:/usr/local/bin:$PAT
 
 say "dependencies"
 missing=()
-for tool in git go python3 jq fzf gh; do
+for tool in git go python3 jq fzf gh lazygit; do
   command -v "$tool" >/dev/null 2>&1 || missing+=("$tool")
 done
 if [ ${#missing[@]} -gt 0 ]; then
