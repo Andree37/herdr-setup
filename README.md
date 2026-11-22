@@ -33,7 +33,7 @@ It does:
 | [herdr-ct](https://github.com/Andree37/herdr-ct) | `prefix+t`: code-tree pane beside the agent |
 | [herdr-intercom](https://github.com/Andree37/herdr-intercom) | `prefix+i`: intercom pane |
 | [herdr-lazygit](https://github.com/Andree37/herdr-lazygit) | `prefix+g`: lazygit beside the agent, in its repo (same key jumps to it or closes it); `prefix+shift+g` below |
-| [herdr-views](https://github.com/Andree37/herdr-views) | `prefix+a` agents, `prefix+p` PRs, `prefix+shift+l` links, `prefix+o` / `prefix+shift+o` back and forward, `prefix+n` the agent that needs you |
+| [herdr-views](https://github.com/Andree37/herdr-views) | `prefix+a` agents, `prefix+s` spaces tree, `prefix+p` PRs, `prefix+shift+l` links, `prefix+o` / `prefix+shift+o` back and forward, `prefix+n` the agent that needs you |
 
 And in this repo:
 

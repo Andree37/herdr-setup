@@ -16,6 +16,11 @@ cycle_pane_previous = "prefix+left"
 cycle_pane_next = "prefix+right"
 toggle_sidebar = "prefix+b"
 rename_tab = "prefix+ctrl+t"   # prefix+shift+t opens code-tree below the agent
+# Defaults moved to prefix+ctrl+<same letter>, their keys went to plugins:
+settings = "prefix+ctrl+s"                  # prefix+s is the spaces tree
+open_notification_target = "prefix+ctrl+o"  # prefix+o is back
+goto = "prefix+ctrl+g"                      # prefix+g is lazygit
+new_worktree = "prefix+ctrl+shift+g"        # prefix+shift+g is lazygit below
 
 # Picker: open tabs with their agent's state (blocked and done first), then
 # every ~/github/<org>/<repo>.
@@ -31,6 +36,12 @@ key = "prefix+a"
 type = "plugin_action"
 command = "local.herdr-views.open-agents"
 description = "travel to an agent"
+
+[[keys.command]]
+key = "prefix+s"   # like tmux's choose-tree
+type = "plugin_action"
+command = "local.herdr-views.open-tree"
+description = "spaces, tabs and agents as a tree"
 
 [[keys.command]]
 key = "prefix+p"
