@@ -21,7 +21,8 @@ It does:
 - clones each component repo next to this one (`~/github/Andree37/<repo>`, or `$HERDR_SRC`), or pulls
   the latest if it is already there; a repo with uncommitted or unpushed work is left alone
 - `ct` and `ic` (`go install`) and both tools' Claude Code hooks
-- links: `config.toml` to `~/.config/herdr/config.toml`, `bin/*` to `~/.local/bin/`
+- links: `config.toml` to `~/.config/herdr/config.toml`, `shell/herdr.zsh` to `~/.config/herdr/shell.zsh`,
+  `bin/*` to `~/.local/bin/`
 - the four plugins, linked from their clones so herdr runs exactly what is on disk
 
 ## Components
@@ -42,6 +43,7 @@ And in this repo:
 | `config.toml` | herdr config: keys for everything above, sidebar tree, Agents panel as a "needs you" queue |
 | `bin/herdr-sessionizer` | `prefix+f`: jump to an open tab or start claude in any project under `~/github` |
 | `bin/herdr-new` | start another claude session in a folder, as a new space or tab |
+| `shell/herdr.zsh` | sourced from `~/.zshrc`: in herdr panes Ctrl+D no longer exits the shell, so quitting claude keeps its tab |
 | `bin/herdr-agents` | `save` before a reboot, `up` after it: brings every agent back into its conversation |
 
 ## Changing things
