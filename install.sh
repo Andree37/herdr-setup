@@ -104,7 +104,6 @@ link() {
   echo "  linked ~/$2"
 }
 link config.toml .config/herdr/config.toml
-link shell/herdr.zsh .config/herdr/shell.zsh
 for script in "$repo"/bin/*; do
   link "bin/$(basename "$script")" ".local/bin/$(basename "$script")"
 done
