@@ -134,18 +134,13 @@ rows = [
 ]
 
 # The Agents panel is the attention queue: herdr-views filters it to agents
-# that are blocked or done, or whose code-tree has a point waiting for you.
+# that are blocked or done.
 [ui.sidebar.agents.rows_by_agent]
 claude = [
     ["state_icon", "workspace", "tab"],
     [
         { token = "state_text", fg = "#89b4fa" },
         { token = "$hv_pr", dim = true },
-    ],
-    # code-tree: what waits for you, then the card this Claude is on
-    [
-        { token = "$hv_ct_you", fg = "#fe8019" },
-        { token = "$hv_ct", dim = true },
     ],
 ]
 
